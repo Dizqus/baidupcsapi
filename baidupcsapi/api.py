@@ -20,17 +20,18 @@ from requests_toolbelt import MultipartEncoder
 import requests
 import rsa
 import tempfile
+import chardet
 
 try:
     requests.packages.urllib3.disable_warnings()
 except:
     pass
 
-'''
+# '''
 logging.basicConfig(level=logging.DEBUG,
-    format='%(asctime)s %(filename)s[line:%(lineno)d] %(levelname)s %(message)s',
-    datefmt='%a, %d %b %Y %H:%M:%S')
-'''
+                    format='%(asctime)s %(filename)s[line:%(lineno)d] %(levelname)s %(message)s',
+                    datefmt='%a, %d %b %Y %H:%M:%S', filename='logs/debug.log')
+# '''
 
 BAIDUPAN_SERVER = 'pan.baidu.com'
 BAIDUPCS_SERVER = 'pcs.baidu.com'
@@ -129,7 +130,7 @@ def check_login(func):
                 foo = json.loads(ret.content.decode('utf-8'))
                 if 'errno' in foo and foo['errno'] == -6:
                     logging.debug(
-                            'Offline, deleting cookies file then relogin.')
+                        'Offline, deleting cookies file then relogin.')
                     path = '.{0}.cookies'.format(args[0].username)
                     if os.path.exists(path):
                         os.remove(path)
@@ -174,7 +175,7 @@ class PCSBase(object):
         :returns: str -- 服务器地址
         """
         ret = requests.get(
-                'https://pcs.baidu.com/rest/2.0/pcs/manage?method=listhost').content
+            'https://pcs.baidu.com/rest/2.0/pcs/manage?method=listhost').content
         serverlist = [server['host'] for server in json.loads(ret)['list']]
         url_pattern = 'http://{0}/monitor.jpg'
         time_record = []
@@ -231,7 +232,7 @@ class PCSBase(object):
         cookies_file = '.{0}.cookies'.format(self.username)
         with open(cookies_file, 'wb') as f:
             pickle.dump(
-                    requests.utils.dict_from_cookiejar(self.session.cookies), f)
+                requests.utils.dict_from_cookiejar(self.session.cookies), f)
 
     def _load_cookies(self):
         cookies_file = '.{0}.cookies'.format(self.username)
@@ -241,7 +242,7 @@ class PCSBase(object):
                           self.username)
             with open(cookies_file, 'rb') as cookies_file:
                 cookies = requests.utils.cookiejar_from_dict(
-                        pickle.load(cookies_file))
+                    pickle.load(cookies_file))
                 logging.debug(str(cookies))
                 self.session.cookies = cookies
                 self.user['BDUSS'] = self.session.cookies['BDUSS']
@@ -251,10 +252,10 @@ class PCSBase(object):
             return False
 
     def _get_token(self):
-        # Token
+        # Token 从 session 里面捞token
         ret = self.session.get(
-                'https://passport.baidu.com/v2/api/?getapi&tpl=mn&apiver=v3&class=login&tt=%s&logintype=dialogLogin&callback=0' % int(
-                        time.time())).text.replace('\'', '\"')
+            'https://passport.baidu.com/v2/api/?getapi&tpl=mn&apiver=v3&class=login&tt=%s&logintype=dialogLogin&callback=0' % int(
+                time.time())).text.replace('\'', '\"')
         foo = json.loads(ret)
         logging.info('token %s' % foo['data']['token'])
         return foo['data']['token']
@@ -263,7 +264,7 @@ class PCSBase(object):
         # Captcha
         if code_string:
             verify_code = self.captcha_func(
-                    "https://passport.baidu.com/cgi-bin/genimage?" + code_string.decode('utf-8'))
+                "https://passport.baidu.com/cgi-bin/genimage?" + code_string.decode('utf-8'))
         else:
             verify_code = ""
 
@@ -311,7 +312,7 @@ class PCSBase(object):
                           'ppui_logintime': '50918',
                           'callback': 'parent.bd__pcbs__oa36qm'}
             result = self.session.post(
-                    'https://passport.baidu.com/v2/api/?login', data=login_data)
+                'https://passport.baidu.com/v2/api/?login', data=login_data)
 
             # 是否需要验证码
             if b'err_no=257' in result.content or b'err_no=6' in result.content:
@@ -367,6 +368,7 @@ class PCSBase(object):
                                             'u': 'https://www.baidu.com/'
                                             })
             if resp.ok:
+                # 目前这里有bug, 如果需要需要输入验证码, 特别是云服务器... 不行.
                 while 1:
                     # get vcode
                     vcode = input('Verification Code> ')
@@ -387,9 +389,7 @@ class PCSBase(object):
 
                     vresp_data = json.loads(vresp.content.decode())
                     if vresp_data['errno'] == 110000:
-
                         loginproxy_resp = self.session.get(urlparse.unquote(loginproxy_url.decode()))
-
 
                         return
             else:
@@ -467,15 +467,20 @@ class PCSBase(object):
                 )
 
                 response = self.session.post(
-                        api, data=body, verify=False, headers=headers, **kwargs)
+                    api, data=body, verify=False, headers=headers, **kwargs)
         else:
             api = url
             if uri == 'filemanager' or uri == 'rapidupload' or uri == 'filemetas' or uri == 'precreate':
                 response = self.session.post(
-                        api, params=params, verify=False, headers=headers, **kwargs)
+                    api, params=params, verify=False, headers=headers, **kwargs)
             else:
                 response = self.session.get(
-                        api, params=params, verify=False, headers=headers, **kwargs)
+                    api, params=params, verify=False, headers=headers, **kwargs)
+
+        logging.debug("pcs request url=%s" % response.request.url)
+        logging.debug("pcs request method=%s" % response.request.method)
+        logging.debug("pcs request headers=%s" % response.request.headers)
+        logging.debug("pcs response html=%s" % response.text)
         return response
 
 
@@ -698,8 +703,22 @@ class PCS(PCSBase):
         # refered:
         # https://github.com/PeterDing/iScript/blob/master/pan.baidu.com.py
         url = 'http://pan.baidu.com/disk/home'
-        resp = self.session.get(url)
+
+        # chrome 抓包看到这些, header ua 要一致, 不设置会有问题, 其他人不知道有没有问题.. 我的账号是超级vip... 出问题了..抓包解决
+        req_params = {'errno': 0, 'errmsg': 'Auth Login Sucess', 'bduss': '', 'ssnerror': 0, 'traceid': '',
+                      'adapt': 'pc', 'fr': 'ftw'}
+        resp = self.session.get(url, params=req_params, headers=BAIDUPAN_HEADERS)
+        logging.debug("sign request url=%s" % resp.request.url)
+        logging.debug("sign request headers=%s" % resp.request.headers)
+        logging.debug("sign resp=%s" % resp.text)
+        # debug 一些log
+
         html = resp.content
+        # 加入了编码. py3 遇到问题了
+        encode_type = chardet.detect(html)
+        encoding = encode_type['encoding']
+        html = html.decode(encode_type['encoding'])
+
         sign1 = re.search(r'"sign1":"([A-Za-z0-9]+)"', html).group(1)
         sign3 = re.search(r'"sign3":"([A-Za-z0-9]+)"', html).group(1)
         timestamp = re.search(r'"timestamp":([0-9]+)[^0-9]', html).group(1)
@@ -732,6 +751,7 @@ class PCS(PCSBase):
                 k = p[((p[i] + p[u]) % 256)]
                 o += chr(ord(r[q]) ^ k)
 
+            o = o.encode(encoding)  # py3 需要重新encoding 一下 转换为 bytes
             return base64.b64encode(o)
 
         self.dsign = sign2(sign3, sign1)
@@ -829,8 +849,8 @@ class PCS(PCSBase):
 
     def _handle_shared_captcha(self, shareid, uk, password):  # 处理分享页的验证码
         rep = json.loads(
-                self._request(None, data={"prod": "shareverify"},
-                              url="https://pan.baidu.com/api/getcaptcha").content.decode('utf-8'))
+            self._request(None, data={"prod": "shareverify"},
+                          url="https://pan.baidu.com/api/getcaptcha").content.decode('utf-8'))
 
         vcode = self.captcha_func("https://pan.baidu.com/genimage?" + str(rep["vcode_str"]))
         return self._verify_shared_file(shareid, uk, password, vcode=vcode, vcode_str=str(rep["vcode_str"]))
